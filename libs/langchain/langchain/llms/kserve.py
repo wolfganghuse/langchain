@@ -23,7 +23,14 @@ class KserveMLRequestError(KserveMLError):
     """Raised when there's an issue with the request to KServe."""
     pass
 
+class KserveMLModelFetchError(KserveMLError):
+    """Raised when there's an issue fetching the default model name."""
+    pass
 
+class KserveMLEndpointError(KserveMLError):
+    """Raised when there's an issue with constructing the endpoint URL."""
+    pass
+    
 class KserveML(LLM):
 
     """KserveML LLM service.
@@ -32,16 +39,18 @@ class KserveML(LLM):
         .. code-block:: python
 
             from langchain.llms import KserveML
-            endpoint_url = (
-                "https://models.hosted-on.kserve.hosting/v2/models/my-model/infer"
+            base_url = (
+                "https://models.hosted-on.kserve.hosting"
             )
-            kserve_llm = KserveML(endpoint_url=endpoint_url)
+            kserve_llm = KserveML(base_url=base_url)
     """
 
-    endpoint_url: str = (
-        "https://models.hosted-on.kserve.hosting/v2/models/my-model/infer"
+    base_url: str = (
+        "https://models.hosted-on.kserve.hosting"
     )
-    """Endpoint URL to use."""
+
+    endpoint_url: str = ("")
+    """Endpoint URL to use, dynamically generate from the default model and inference_host"""
 
     model_kwargs: Optional[dict] = None
     """Keyword arguments to pass to the model."""
@@ -49,12 +58,33 @@ class KserveML(LLM):
     retry_sleep: float = 1.0
     """How long to try sleeping for if a rate limit is encountered"""
 
-    max_retries = 3
+    max_retries: int = 3
     """Maximum number of retries on failure"""
     
-    request_timeout = 10
+    request_timeout: int = 10
     """Timeout for the request in seconds"""
-    
+
+    def __init__(self, **data):
+        @staticmethod
+        def get_default_model_name(inference_host: str) -> Optional[str]:
+            kserve_url = f'{inference_host}/v1/models'    
+            try:
+                response = requests.get(kserve_url)
+                response.raise_for_status()
+                models = response.json()
+                return models['models'][0]
+            except requests.exceptions.RequestException as e:
+                raise KserveMLModelFetchError(f"Failed to connect to kserve at {kserve_url}: {e}")
+
+        super().__init__(**data)
+        default_model = get_default_model_name(self.base_url)
+        self.endpoint_url: str = (
+            f"{self.base_url}/v2/models/{default_model}/infer" if default_model else ""
+        )
+        if not self.endpoint_url:
+            raise KserveMLEndpointError("Failed to construct the endpoint URL due to a missing default model name.")
+
+
     class Config:
         """Configuration for this pydantic object."""
         
